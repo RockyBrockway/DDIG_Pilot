@@ -1,0 +1,287 @@
+---
+title: "DDIG_Pilot"
+author: "Rocky Brockway"
+date: "2023-10-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#packages
+
+library(ggplot2)
+library(dplyr)
+library(stringr)
+library(dunn.test)
+library(ggsignif)
+library(combinat)
+library(reshape2)
+library(gridExtra)
+
+```
+
+
+
+
+```{r}
+#read in data
+
+data<-read.csv(file = "CombinedData.csv")
+
+```
+
+```{r}
+#create a vector of column names that I want to replace any negative or empty values with na
+cols_to_check <- c("ML", "AL", "MW", "MTH", "BW", "NW", "DSA", "PSA")  # Add more columns as necessary
+#attribute value must be greater than 0, otherwise it's na
+data[cols_to_check] <- lapply(data[cols_to_check], function(x) ifelse(x < 0, NA, x))
+```
+
+
+
+```{r}
+#Filter for point type Elko
+data <- data %>%
+  filter(PointType == "Elko" | PointType == "Elko?") 
+          
+         # & (CndString == "Whole" | CndString == "Nearly complete"))
+
+#remove isolates
+data <- data %>%
+  filter(!str_detect(Site, "-ISO"))
+```
+
+```{r}
+#function to subset data into each attribute in cols_to_check and site number
+
+create_separate_dataframes <- function(data, cols_to_check) {
+  # List to store dataframes
+  data_list <- list()
+  
+  # Loop through each variable
+  for (col in cols_to_check) {
+    # Subset the data
+    temp_data <- data[, c("Site", col)]
+    
+    # Remove NA values
+    temp_data <- temp_data[!is.na(temp_data[col]),]
+    
+    # Filter out sites with less than 20 observations
+    temp_data <- temp_data %>%
+      group_by(Site) %>%
+      filter(n() >= 20) %>%
+      ungroup()
+    
+    # Store in the list with a name like "dataVarName"
+    data_list[[paste0("data", col)]] <- temp_data
+  }
+  
+  return(data_list)
+}
+
+```
+
+```{r}
+#run the function and put each variable in a list as a separate dataframe
+data_list <- create_separate_dataframes(data, cols_to_check)
+
+```
+
+
+```{r}
+
+
+# Loop through each dataframe in the list to create a boxplot
+for (df_name in names(data_list)) {
+  df <- data_list[[df_name]]
+  
+  # Extract variable name (removing "data" prefix)
+  var_name <- sub("^data", "", df_name)
+  
+  # Calculate mean and count for each site
+  stats <- df %>% 
+    group_by(Site) %>%
+    summarise(Mean = mean(!!sym(var_name)), Count = n())
+
+# Create a new column in the stats dataframe to hold the new label
+stats$Site_Label <- paste(stats$Site, "\n(n=", stats$Count, ")", sep = "")
+
+# Create the boxplot
+p <- ggplot(df, aes(x = Site, y = !!sym(var_name), fill = Site)) +
+    geom_boxplot(outlier.shape = NA) +  # avoid displaying outliers twice
+    geom_point(data = stats, aes(y = Mean, group = Site),
+               shape = 23, fill = "black", color = "white", size = 3,
+               position = position_dodge(width = 0.75)) +
+    labs(title = paste("Boxplot for", var_name),
+         y = var_name) +
+    scale_x_discrete(labels = stats$Site_Label) +
+    theme_minimal() +
+    theme(legend.position = "none", axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Display the plot
+print(p)
+}
+
+
+
+```
+
+
+```{r}
+# Modify data to include 'SiteLabel' with observation counts and mean
+for (df_name in names(data_list)) {
+  df <- data_list[[df_name]]
+  
+  # Calculate counts and means
+  counts <- table(df$Site)
+  means <- tapply(df[[sub("^data", "", df_name)]], df$Site, mean, na.rm = TRUE)  # mean for specific variable
+  
+  df$SiteLabel <- with(df, paste(Site, "\n (n=", counts[Site], ", x̄=", round(means[Site], 0), ")", sep=""))
+  data_list[[df_name]] <- df
+}
+
+# Plotting
+for (df_name in names(data_list)) {
+  df <- data_list[[df_name]]
+  
+  # Extract variable name (removing "data" prefix)
+  var_name <- sub("^data", "", df_name)
+  
+  p <- ggplot(df, aes_string(x = var_name, fill = "Site")) +
+      geom_density(alpha = 0.7) +
+      labs(title = paste("Density Plot for", var_name),
+           x = var_name) +
+      facet_grid(SiteLabel ~ ., scales = "free_y", space = "free_y") +
+      theme_minimal() +
+      theme(legend.position = "none", 
+            strip.background = element_blank(), 
+            strip.text.y = element_text(size = 10, angle = 0))
+  
+  print(p)
+}
+
+
+```
+
+
+
+```{r}
+for (i in seq_along(data_list)) {
+  df <- data_list[[i]]
+  
+  # Assuming the variable of interest is always the second column for simplicity
+  var_name <- names(df)[2]
+  
+  cat(paste("\nNormality test for", var_name, ":\n"))
+  for(site in unique(df$Site)){
+    data_subset <- df[df$Site == site, var_name, drop = FALSE]
+    
+    # Check for the sample size limitation of the Shapiro-Wilk test
+    if (nrow(data_subset) <= 5000) {
+      shapiro_test <- shapiro.test(data_subset[[var_name]])
+      cat(paste("Shapiro-Wilk test for site", site, ":", 
+                "W =", round(shapiro_test$statistic, 3), 
+                "p-value =", format.pval(shapiro_test$p.value, digits=3), "\n"))
+    } else {
+      cat(paste("Site", site, "has too many observations for the Shapiro-Wilk test. Consider sampling or an alternative test.\n"))
+    }
+  }
+}
+
+
+```
+
+
+```{r}
+generate_matrix <- function(data, attribute) {
+  
+  # Identify the sites with insufficient data points
+  sites_to_exclude <- unique(data$Site[sapply(unique(data$Site), function(site) {
+    sum(data$Site == site & !is.na(data[[attribute]])) <= 1
+  })])
+  
+  # Exclude these sites
+  filtered_data <- data[!data$Site %in% sites_to_exclude, ]
+  
+  # Recreate the pairwise comparison matrix
+  results_matrix <- matrix(NA, nrow = length(unique(filtered_data$Site)), ncol = length(unique(filtered_data$Site)))
+  rownames(results_matrix) <- unique(filtered_data$Site)
+  colnames(results_matrix) <- unique(filtered_data$Site)
+  
+  # Populate the matrix with p-values
+  for (i in 1:nrow(results_matrix)) {
+    for (j in 1:ncol(results_matrix)) {
+      group1 <- filtered_data[[attribute]][filtered_data$Site == rownames(results_matrix)[i]]
+      group2 <- filtered_data[[attribute]][filtered_data$Site == colnames(results_matrix)[j]]
+      
+      # Skip this pair if either group doesn't have at least 2 observations
+      if(length(group1) <= 1 || length(group2) <= 1) {
+        next
+      }
+      
+      test_result <- tryCatch({
+        wilcox.test(group1, group2, paired = FALSE)$p.value
+      }, error = function(e) NA)
+      
+      results_matrix[i, j] <- ifelse(is.na(test_result), NA, test_result)
+    }
+  }
+  
+  return(results_matrix)
+}
+
+
+```
+
+
+```{r}
+matrices_list <- lapply(data_list, function(tibble) {
+  # Assuming the second column contains the data of interest
+  #attribute_data <- tibble[[2]]
+  attribute_name <- names(tibble)[2]
+  generate_matrix(tibble, attribute_name)
+})
+
+names(matrices_list) <- names(data_list)
+
+```
+
+
+
+
+
+
+```{r}
+# Assuming matrices_list is already defined and populated...
+
+for (name in names(matrices_list)) {
+  # Mask the upper triangular part of the current matrix with NA values
+  matrices_list[[name]][upper.tri(matrices_list[[name]])] <- NA
+
+  melt_matrix <- melt(matrices_list[[name]])
+  heatmap_plot <- ggplot(data = melt_matrix, aes(x = Var1, y = Var2, fill = value)) +
+    geom_tile() +
+    scale_fill_gradient2(name = "p-value", 
+                         low = "red", high = "blue", mid = "white",
+                         midpoint = 0.5, limits = c(0, 1),
+                         breaks = c(0, 0.5, 1),
+                         labels = c('0', '0.5', '1'),
+                         na.value = "white") +  # Set NA color to white
+    geom_text(data = subset(melt_matrix, value <= 0.05), 
+              aes(x = Var1, y = Var2, label = "*"), color = "black", size = 6) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+    labs(x = "Site1", y = "Site2", title = paste0("Pairwise Comparison Heatmap (Wilcoxon Test) - ", name),
+         subtitle = "* indicates p ≤ 0.05")
+  print(heatmap_plot)
+}
+
+```
+
+
+```
+
+
