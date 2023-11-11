@@ -1,0 +1,784 @@
+---
+title: "Social Learning Simulation/ABM"
+author: "Rocky Brockway"
+date: "2023-10-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Install and load necessary packages
+library(MASS)
+library(vegan)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(dyngen)
+library(broom)
+```
+
+
+```{r}
+
+########This is a simple version of a function designed to simulate both guided variation and prestige biased projectile point assemblages using continuous attributes. I use two measurements-length and width - but they could be any two continuous attributes. Having two attributes allows me to compare the effect of different mean/sd at the same time. 
+
+####################Arguements within the generateArtifactData_simple function#######################################
+
+# num_assemblages = number of assemblages from 1-n. 
+# num_artifacts = number of artifacts from 1-n in each assemblage and generation. 
+                  #e.g., 10 artifacts x 5 assemblages x 2 generations = 100 artifacts total 
+# num_generations = number of generations from 1-n.
+# initial_mean_length = number in mm - draw from empirical data - to initialize the model
+# initial_mean_width = number in mm - draw from empirical data - to initialize the model
+# initial_mean_length_sd = number in mm, also emprical
+# initial_mean_width_sd = number in mm, also emprical
+# prestige_proportion = the percentage (as a decimal) of the assemblage that represents the work of prestigious individuals
+# prestige_learning probability = the likelihood (as a decimal) that individuals will engage in (prestige) biased social learning   
+
+generateArtifactData_simple <- function(num_assemblages, num_artifacts, num_generations, 
+                                 initial_mean_length, initial_mean_width,
+                                 initial_mean_length_sd, initial_mean_width_sd,
+                                 prestige_proportion, prestige_learning_prob) {
+  
+  # Create empty data frames to store data
+  df_combined_list <- list()
+  
+  # Initial values for prestige and guided variation
+  prestige_mean_length <- initial_mean_length
+  prestige_mean_width <- initial_mean_width
+  prestige_length_sd <- initial_mean_length_sd
+  prestige_width_sd <- initial_mean_width_sd
+  
+  guided_mean_length <- initial_mean_length
+  guided_mean_width <- initial_mean_width
+  guided_length_sd <- initial_mean_length_sd
+  guided_width_sd <- initial_mean_width_sd
+  
+  for (generation in 1:num_generations) {
+    for (assemblage in 1:num_assemblages) {
+      # Generate prestige artifacts
+      num_prestige <- round(num_artifacts * prestige_proportion)
+      prestige_artifacts <- data.frame(
+        Length = rnorm(num_prestige, mean = prestige_mean_length, sd = prestige_length_sd),
+        Width = rnorm(num_prestige, mean = prestige_mean_width, sd = prestige_width_sd),
+        Assemblage = rep(assemblage, times = num_prestige),
+        Generation = rep(generation, times = num_prestige),
+        Scenario = rep("Prestige", times = num_prestige)
+      )
+      
+      # Generate artifacts influenced by prestige learning
+      num_prestige_learning <- round(num_artifacts * prestige_learning_prob)
+      prestige_learning_artifacts <- data.frame(
+        Length = rnorm(num_prestige_learning, mean = prestige_mean_length, sd = prestige_length_sd),
+        Width = rnorm(num_prestige_learning, mean = prestige_mean_width, sd = prestige_width_sd),
+        Assemblage = rep(assemblage, times = num_prestige_learning),
+        Generation = rep(generation, times = num_prestige_learning),
+        Scenario = rep("Prestige Learning", times = num_prestige_learning)
+      )
+      
+      # Generate artifacts influenced by guided variation
+      num_guided <- num_artifacts - num_prestige - num_prestige_learning
+    
+       # Handle scenarios where num_guided is non-positive
+      while (num_guided <= 0) {
+        num_prestige <- num_prestige - 1
+        num_prestige_learning <- num_prestige_learning - 1
+        num_guided <- num_artifacts - num_prestige - num_prestige_learning
+      }
+
+      guided_artifacts <- data.frame(
+        Length = rnorm(num_guided, mean = guided_mean_length, sd = guided_length_sd),
+        Width = rnorm(num_guided, mean = guided_mean_width, sd = guided_width_sd),
+        Assemblage = rep(assemblage, times = num_guided),
+        Generation = rep(generation, times = num_guided),
+        Scenario = rep("Guided Variation", times = num_guided)
+      )
+      
+      # Combine the artifacts for this assemblage and add to the list
+      generation_data <- rbind(prestige_artifacts, prestige_learning_artifacts, guided_artifacts)
+      df_combined_list[[paste0("G", generation, "_A", assemblage)]] <- generation_data
+    }
+    
+    # Update means and standard deviations for next generation
+    prestige_mean_length <- mean(rbind(prestige_artifacts, prestige_learning_artifacts)$Length)
+    prestige_mean_width <- mean(rbind(prestige_artifacts, prestige_learning_artifacts)$Width)
+    prestige_length_sd <- sd(rbind(prestige_artifacts, prestige_learning_artifacts)$Length)
+    prestige_width_sd <- sd(rbind(prestige_artifacts, prestige_learning_artifacts)$Width)
+    
+    guided_mean_length <- mean(guided_artifacts$Length)
+    guided_mean_width <- mean(guided_artifacts$Width)
+    guided_length_sd <- sd(guided_artifacts$Length)
+    guided_width_sd <- sd(guided_artifacts$Width)
+  }
+  
+  # Combine data frames from all generations and assemblages
+  df_combined <- do.call(rbind, df_combined_list)
+  
+  return(df_combined)
+}
+
+```
+
+```{r}
+ data<-generateArtifactData_simple(
+  num_assemblages = 5,
+  num_artifacts = 1000, 
+  num_generations = 5, 
+  initial_mean_length = 38, 
+  initial_mean_width = 21, 
+  initial_mean_length_sd = 9, 
+  initial_mean_width_sd = 3.75, 
+  prestige_proportion = 0.15,
+  prestige_learning_prob = 0.6)
+```
+
+
+
+
+
+```{r}
+#####################Alternative function that adds more nuance######################################################
+
+####################Arguements within the generateArtifactData_simple function#######################################
+
+# num_assemblages = number of assemblages from 1-n. 
+# num_artifacts = number of artifacts from 1-n in each assemblage and generation. 
+                  #e.g., 10 artifacts x 5 assemblages x 2 generations = 100 artifacts total 
+# num_generations = number of generations from 1-n.
+# initial_mean_length = number in mm - draw from empirical data - to initialize the model
+# initial_mean_width = number in mm - draw from empirical data - to initialize the model
+# initial_mean_length_sd = number in mm, also emprical
+# initial_mean_width_sd = number in mm, also emprical
+# prestige_proportion = the percentage (as a decimal) of the assemblage that represents the work of prestigious individuals
+# prestige_learning probability = the likelihood (as a decimal) that individuals will engage in (prestige) biased social learning
+# min_length = minimum allowable length in mm, empirical
+# max_length = maximum allowable length in mm, empirical
+# min_width = minimum allowable width in mm, empirical
+# max_width = maximum allowable width in mm, empirical
+# guided_sd_fluct_len = fluctuations in sd that represent innovation, expressed as a percentage (decimal) of the initial sd
+# guided_sd_fluct_wid = fluctuations in sd that represent innovation, expressed as a percentage (decimal) of the initial sd
+# prestige_sd_len = standard deviation expressed as a percentage (decimal) of initial sd for prestige biased artifacts 
+# prestige_sd_wid = standard deviation expressed as a percentage (decimal) of iniital sd for prestige biased artifacts
+
+generateArtifactData <- function(num_assemblages, num_artifacts, num_generations, 
+                                 initial_mean_length, initial_mean_width,
+                                 initial_mean_length_sd, initial_mean_width_sd,
+                                 prestige_proportion, prestige_learning_prob,
+                                 min_length, max_length, min_width, max_width, 
+                                 guided_sd_fluct_len, guided_sd_fluct_wid,
+                                 prestige_sd_len, prestige_sd_wid) {
+  
+  # Create empty list to store dataframes
+  df_combined_list <- list()
+  
+  # Initial values for prestige and guided variation
+  # replicate elements - rep(x,times)- helps with for loops - creates a vector with the mean value for each assemblage
+  assemblage_prestige_mean_lengths <- rep(initial_mean_length, num_assemblages) 
+  assemblage_prestige_mean_widths <- rep(initial_mean_width, num_assemblages)
+  
+  #sets the sd fluctuations for guided variation
+  guided_length_sd_fluctuation <- guided_sd_fluct_len * initial_mean_length_sd
+  guided_width_sd_fluctuation <- guided_sd_fluct_wid * initial_mean_width_sd
+  
+  #sets the prestige sd values
+  prestige_learning_length_SD <- prestige_sd_len * initial_mean_length_sd
+  prestige_learning_width_SD <- prestige_sd_wid * initial_mean_width_sd
+  
+  #nested for loops that generate the data
+  #for each generation and assemblage, create prestige artifacts as a proportion of the total in a 5 variable dataframe.
+  #measurement variables are generated using rnorm(n, mean = , sd = ) function
+  #other variables are generated using rep function
+  for (generation in 1:num_generations) {
+    for (assemblage in 1:num_assemblages) {
+      # Generate prestige artifacts
+      num_prestige <- round(num_artifacts * prestige_proportion)
+      prestige_artifacts <- data.frame(
+        Length = rnorm_bounded(num_prestige, mean = assemblage_prestige_mean_lengths[assemblage], sd = initial_mean_length_sd, 
+                               min = min_length, max = max_length),
+        Width = rnorm_bounded(num_prestige, mean = assemblage_prestige_mean_widths[assemblage], sd = initial_mean_width_sd, 
+                      min=min_width, max=max_width),
+        Assemblage = rep(assemblage, times = num_prestige),
+        Generation = rep(generation, times = num_prestige),
+        Scenario = rep("Prestige", times = num_prestige)
+      )
+      
+      
+      # Generate artifacts influenced by prestige learning
+      num_prestige_learning <- round(num_artifacts * prestige_learning_prob)
+      prestige_learning_artifacts <- data.frame(
+        Length = rnorm_bounded(num_prestige_learning, mean = assemblage_prestige_mean_lengths[assemblage], 
+                       sd = prestige_learning_length_SD, min = min_length, max = max_length),
+        Width = rnorm_bounded(num_prestige_learning, mean = assemblage_prestige_mean_widths[assemblage], 
+                      sd = prestige_learning_width_SD, min = min_width, max = max_width),
+        Assemblage = rep(assemblage, times = num_prestige_learning),
+        Generation = rep(generation, times = num_prestige_learning),
+        Scenario = rep("Prestige Learning", times = num_prestige_learning)
+      )
+    
+      
+      # Generate artifacts influenced by guided variation
+      num_guided <- num_artifacts - num_prestige - num_prestige_learning
+    
+      # Handle scenarios where num_guided is non-positive
+      while (num_guided <= 0) {
+        num_prestige <- num_prestige - 1
+        num_prestige_learning <- num_prestige_learning - 1
+        num_guided <- num_artifacts - num_prestige - num_prestige_learning
+      }
+      
+      # Introduce slight fluctuations in SD for guided variation
+      guided_length_sd <- initial_mean_length_sd + runif(1, -guided_length_sd_fluctuation, guided_length_sd_fluctuation)
+      guided_width_sd <- initial_mean_width_sd + runif(1, -guided_width_sd_fluctuation, guided_width_sd_fluctuation)
+
+      guided_artifacts <- data.frame(
+        Length = rnorm_bounded(num_guided, mean = initial_mean_length, sd = guided_length_sd, min = min_length, max = max_length),
+        Width = rnorm_bounded(num_guided, mean = initial_mean_width, sd = guided_width_sd,min = min_width, max = max_width),
+        Assemblage = rep(assemblage, times = num_guided),
+        Generation = rep(generation, times = num_guided),
+        Scenario = rep("Guided Variation", times = num_guided)
+      )
+    
+      
+      # Combine the artifacts for this assemblage and add to the list
+      generation_data <- rbind(prestige_artifacts, prestige_learning_artifacts, guided_artifacts)
+      df_combined_list[[paste0("G", generation, "_A", assemblage)]] <- generation_data
+    }
+    
+    # Update prestige means for next generation for each assemblage
+    for (assemblage in 1:num_assemblages) {
+      current_assemblage_data <- df_combined_list[[paste0("G", generation, "_A", assemblage)]]
+      prestige_data <- current_assemblage_data[current_assemblage_data$Scenario == "Prestige", ]
+      assemblage_prestige_mean_lengths[assemblage] <- mean(prestige_data$Length)
+      assemblage_prestige_mean_widths[assemblage] <- mean(prestige_data$Width)
+    }
+  }
+  
+  # Combine data frames from all generations and assemblages
+  df_combined <- do.call(rbind, df_combined_list)
+  
+  return(df_combined)
+}
+
+
+```
+
+
+
+
+```{r}
+# Calling the function with specified parameter values
+set.seed(123) # make reproducible 
+artifact_data <- generateArtifactData(
+  num_assemblages = 5, 
+  num_artifacts = 100, 
+  num_generations = 300, 
+  initial_mean_length = 38, #based on empirical data
+  initial_mean_width = 21, #based on empirical data
+  initial_mean_length_sd = 9, #based on empirical data
+  initial_mean_width_sd = 3.75, #based on empirical data
+  prestige_proportion = 0.15, 
+  prestige_learning_prob = 0.6,
+  min_length = 19.5,  # Minimum length constraint based on empirical data
+  max_length = 69,  # Maximum length constraint based on empirical data
+  min_width = 12.3,   # Minimum width constraint based on empirical data
+  max_width = 32,    # Maximum width constraint based on empirical data
+  guided_sd_fluct_len = 0.2,
+  guided_sd_fluct_wid = 0.2,
+  prestige_sd_len = 1.0, 
+  prestige_sd_wid = 1.0
+)
+
+# Viewing the first few rows of the generated data
+head(artifact_data)
+
+
+```
+
+
+```{r}
+library(ggplot2)
+
+# Filter out only Prestige Learning and Guided Variation scenarios
+filtered_data <- artifact_data[artifact_data$Scenario %in% c("Prestige Learning", "Guided Variation"), ]
+
+# Density plot for Length by Scenario across Generations
+  
+ggplot(filtered_data, aes(x = Length, fill = Scenario)) + 
+  geom_density(alpha = 0.5) +
+  facet_wrap(~ Assemblage) + 
+  theme_minimal() +
+  labs(title = "Density plot of Length by Scenario across Generations", 
+       y = "Density",
+       x = "Length")
+
+
+#Boxplot for Length by scenario across generations
+  # the results are interesting in that the prestige biased average is slightly greater and there is more average variation within   the 68%.
+  # there is also some minor fluctuation of the mean for prestige bias
+ggplot(filtered_data, aes(x=factor(Assemblage), y = Length, fill=factor(Assemblage))) +
+  geom_boxplot() +
+  facet_grid(rows=vars(Scenario), scales="free")+
+  labs(title = "Artifact Lengths by Learning Scenario and Assemblage Across Generations")+
+  xlab("Assemblage")+
+  theme_minimal()+
+  theme(legend.position="none")
+
+
+### Let's filter the data and examine within generations
+  #here we can see a lot more variability between assemblages and scenarios
+
+Gen_Filter<-300
+
+filtered_data2 <- filtered_data[filtered_data$Generation==Gen_Filter,]
+
+# Create density distribution plots
+ggplot(filtered_data2, aes(x = Length, fill = Scenario)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~Assemblage, scales = "free") +
+  labs(title = paste("Density Distribution of Artifact Lengths for Generation", Gen_Filter),
+       x = "Artifact Length",
+       y = "Density") +
+  theme_minimal()
+
+# Create stacked density distribution plots-length
+ggplot(filtered_data2, aes(x = Length, fill = Scenario)) +
+  geom_density(alpha = 0.5, position = "identity") +
+  facet_wrap(~Assemblage, scales = "free_y", ncol = 1) +
+  labs(title = paste("Stacked Density Distribution of Artifact Lengths by Assemblage for Generation", Gen_Filter),
+       x = "Artifact Length",
+       y = "Density",
+       fill = "Scenario") +
+  theme_minimal()
+  
+ggplot(filtered_data2, aes(x=factor(Assemblage), y = Length, fill=factor(Assemblage))) +
+  geom_boxplot() +
+  facet_grid(rows=vars(Scenario), scales="free")+
+  labs(title = paste("Artifact Lengths by Learning Scenario and Assemblage for Generation",Gen_Filter))+
+  xlab("Assemblage")+
+  theme_minimal()+
+  theme(legend.position="none")
+```
+
+
+
+```{r}
+
+# Now lets consider VOM, AV, VOV across generations by scenario
+# first we'll use the simplest way to calculate the stats
+
+artifact_stats <- artifact_data %>%
+  group_by(Generation, Scenario, Assemblage) %>%
+  summarize(
+    Mean_Length = mean(Length),
+    SD_Length = sd(Length)
+  ) %>%
+  ungroup() %>%
+  group_by(Generation, Scenario) %>%
+  summarize(
+    VOM = sd(Mean_Length),# here VOM is the standard deviation of the mean values for length
+    AV = mean(SD_Length), # AV is the mean of the standard deviations
+    VOV = sd(SD_Length)   # VOV is the SD of the SDs
+  )
+
+# I'm mostly interested in comparing prestige learning with guided variation, so let's filter out the Prestige data
+artifact_stats<-artifact_stats %>%
+  filter(Scenario!="Prestige")
+
+
+```
+
+```{r}
+# Let's plot to see our results
+
+# First, we need to reshape the data to a long format
+artifact_stats_long <- artifact_stats %>%
+  gather(key = "Metric", value = "Value", VOM, AV, VOV)
+
+# Now, plot the data using separate facets for each metric
+ggplot(artifact_stats_long, aes(x = Generation, y = Value)) +
+  geom_line() +
+  facet_grid(Metric ~ Scenario, scales = "free_y", space = "free_y") +
+  labs(
+    title = "Metrics Across Generations",
+    x = "Generation",
+    y = "Metric Value"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r}
+
+#Here's another way to look at this but with different metrics
+#For VOM we'll use the interquartile range (median 50%), for AV we'll use pooled standard deviation, and for VOV we'll use the coefficient of dispersion which is like CV in that it divides the standard deviation of SDs by the mean SD. 
+
+library(dplyr)
+
+# Calculate pooled standard deviation for AV
+pooled_sd <- function(sd, n) {
+  sqrt(sum((n - 1) * sd^2) / sum(n - 1))
+}
+
+# Calculate coefficient of dispersion for VOV
+coefficient_of_dispersion <- function(sd) {
+  sd(sd) / mean(sd)
+}
+
+artifact_stats2 <- artifact_data %>%
+  group_by(Generation, Scenario, Assemblage) %>%
+  summarize(
+    Mean_Length = mean(Length),
+    SD_Length = sd(Length),
+    n = n(), # Number of artifacts per assemblage
+    .groups = 'drop'
+  ) %>%
+  group_by(Generation, Scenario) %>%
+  summarize(
+    AV = pooled_sd(SD_Length, n), # Pooled SD for AV
+    VOM = IQR(Mean_Length), # IQR of Means for VOM
+    VOV = coefficient_of_dispersion(SD_Length)*10 # Coefficient of Dispersion for VOV
+  )
+
+artifact_stats2<-artifact_stats2 %>%
+  filter(Scenario!="Prestige")
+```
+
+
+```{r}
+# Again, we need to reshape the data to a long format
+artifact_stats2_long <- artifact_stats2 %>%
+  gather(key = "Metric", value = "Value", VOM, AV, VOV)
+
+# Plot the data using separate facets for each metric
+ggplot(artifact_stats2_long, aes(x = Generation, y = Value)) +
+  geom_line() +
+  facet_grid(Metric ~ Scenario, scales = "free_y", space = "free_y") +
+  labs(
+    title = "Metrics Across Generations",
+    x = "Generation",
+    y = "Metric Value"
+  ) +
+  theme_minimal()
+
+```
+
+
+```{r}
+# Let's use the same method for VOM and AV but use the test statistic for Levene's test for VOV instead
+
+artifact_stats <- artifact_data %>%
+  group_by(Generation, Scenario, Assemblage) %>%
+  summarize(
+    Mean_Length = mean(Length),
+    SD_Length = sd(Length),
+    n = n(), # Number of artifacts per assemblage
+    .groups = 'drop'
+  ) %>%
+  group_by(Generation, Scenario) %>%
+  summarize(
+    AV = pooled_sd(SD_Length, n), # Pooled SD for AV
+    VOM = IQR(Mean_Length) # IQR of Means for VOM
+    # VOV will be calculated separately using Levene's test
+  ) %>%
+  ungroup() # Make sure to ungroup for Levene's test
+
+# Add a VOV column to the stats using Levene's test
+artifact_stats$VOV <- NA # Placeholder for VOV values
+
+# This nested for loop calculates Levene's test for each Generation and Scenario
+for(i in unique(artifact_stats$Generation)) {
+  for(j in unique(artifact_stats$Scenario)) {
+    current_data <- artifact_data %>%
+      filter(Generation == i, Scenario == j) %>%
+      mutate(Assemblage = as.factor(Assemblage)) # Ensure Assemblage is a factor
+
+    if (nrow(current_data) > 1 && length(unique(current_data$Assemblage)) > 1) {
+      test_result <- leveneTest(Length ~ Assemblage, data = current_data, center = median) # levene's test for length by assemblage
+      f_value <- test_result$`F value`[1]  # Extract the first element of the F value column
+      
+      if (!is.na(f_value)) {
+        artifact_stats$VOV[artifact_stats$Generation == i & artifact_stats$Scenario == j] <- f_value
+      }
+    }
+  }
+}
+
+
+artifact_stats<-artifact_stats %>%
+  filter(Scenario!="Prestige")
+```
+
+
+```{r}
+# First, we need to reshape the data to a long format
+artifact_stats_long <- artifact_stats %>%
+  gather(key = "Metric", value = "Value", VOM, AV, VOV)
+
+# Now, plot the data using separate facets for each metric
+ggplot(artifact_stats_long, aes(x = Generation, y = Value)) +
+  geom_line() +
+  facet_grid(Metric ~ Scenario, scales = "free_y", space = "free_y") +
+  labs(
+    title = "Metrics Across Generations",
+    x = "Generation",
+    y = "Metric Value"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+#Next, let's consider how we might subdivide these designations using the quantile function
+# We can classify values as either high or low and then consider the remainders to be intermediate
+
+# Calculate global thresholds for each metric
+thresholds <- artifact_stats %>%
+  ungroup() %>% # Make sure we're not grouped
+  summarize(
+    VOM_low = quantile(VOM, probs = 0.33, na.rm = TRUE),
+    VOM_high = quantile(VOM, probs = 0.67, na.rm = TRUE),
+    AV_low = quantile(AV, probs = 0.33, na.rm = TRUE),
+    AV_high = quantile(AV, probs = 0.67, na.rm = TRUE),
+    VOV_low = quantile(VOV, probs = 0.33, na.rm = TRUE),
+    VOV_high = quantile(VOV, probs = 0.67, na.rm = TRUE)
+  )
+
+# Use the thresholds to classify each metric
+artifact_stats <- artifact_stats %>%
+  ungroup() %>% # Make sure we're not grouped
+  mutate(
+    VOM_cat = case_when(
+      VOM < thresholds$VOM_low ~ "Low",
+      VOM > thresholds$VOM_high ~ "High",
+      TRUE ~ "Intermediate"
+    ),
+    AV_cat = case_when(
+      AV < thresholds$AV_low ~ "Low",
+      AV > thresholds$AV_high ~ "High",
+      TRUE ~ "Intermediate"
+    ),
+    VOV_cat = case_when(
+      VOV < thresholds$VOV_low ~ "Low",
+      VOV > thresholds$VOV_high ~ "High",
+      TRUE ~ "Intermediate"
+    )
+  )
+
+# Check results
+print(head(artifact_stats))
+
+```
+
+
+```{r}
+# Summarize the categorical variables for each scenario
+expectations <- artifact_stats %>%
+  group_by(Scenario) %>%
+  summarize(
+    VOM_High = mean(VOM_cat == "High"),
+    VOM_Int = mean(VOM_cat == "Intermediate"),
+    VOM_Low = mean(VOM_cat == "Low"),
+    AV_High = mean(AV_cat == "High"),
+    AV_Int = mean(AV_cat == "Intermediate"),
+    AV_Low = mean(AV_cat == "Low"),
+    VOV_High = mean(VOV_cat == "High"),
+    VOV_Int = mean(VOV_cat == "Intermediate"),
+    VOV_Low = mean(VOV_cat == "Low")
+  )
+
+# This gives us the proportion of generations in each category for each scenario
+print(expectations)
+
+# Reshape the data into long format with separate columns for metric and category
+expectations_long <- expectations %>%
+  pivot_longer(
+    cols = starts_with("VOM_") | starts_with("AV_") | starts_with("VOV_"),
+    names_to = c("Metric", "Category"),
+    names_sep = "_",
+    values_to = "Proportion"
+  ) %>%
+  mutate(
+    Metric = factor(Metric, levels = c("VOM", "AV", "VOV")),
+    Category = factor(Category, levels = c("Low", "Int", "High"))
+  )
+
+# Plot the data with bars for each category and facet by scenario
+ggplot(expectations_long, aes(x = Metric, y = Proportion, fill = Category)) +
+  geom_bar(stat = "identity", position = "stack") +
+  facet_wrap(~ Scenario, scales = "free_x") +
+  labs(
+    title = "Proportions of Metric Categories by Scenario",
+    y = "Proportion",
+    x = "",
+    fill = "Category"
+  ) +
+  scale_fill_grey() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotate x labels for readability
+
+```
+
+```{r}
+# Let's check for normality 
+
+# Initialize a list to store test results
+normality_tests <- list()
+
+# Unique scenarios
+scenarios <- unique(artifact_stats$Scenario)
+
+# Perform Shapiro-Wilk normality tests for each scenario and each metric
+for(scenario in scenarios) {
+  # Filter data for the current scenario
+  scenario_data <- artifact_stats[artifact_stats$Scenario == scenario,]
+  
+  # Shapiro-Wilk test for VOM
+  shapiro_vom <- shapiro.test(scenario_data$VOM)
+  # Shapiro-Wilk test for AV
+  shapiro_av <- shapiro.test(scenario_data$AV)
+  # Shapiro-Wilk test for VOV
+  shapiro_vov <- shapiro.test(scenario_data$VOV)
+  
+  # Store the results in the list
+  normality_tests[[scenario]] <- list(
+    VOM = shapiro_vom,
+    AV = shapiro_av,
+    VOV = shapiro_vov
+  )
+  
+  # Q-Q plots for each metric within the current scenario
+  # VOM
+  qqnorm(scenario_data$VOM, main = paste("Q-Q plot of VOM for", scenario))
+  qqline(scenario_data$VOM, col = "red")
+  # AV
+  qqnorm(scenario_data$AV, main = paste("Q-Q plot of AV for", scenario))
+  qqline(scenario_data$AV, col = "red")
+  # VOV
+  qqnorm(scenario_data$VOV, main = paste("Q-Q plot of VOV for", scenario))
+  qqline(scenario_data$VOV, col = "red")
+}
+
+# Check the results
+normality_tests
+
+```
+```{r}
+# Since the results are ambiguous and we have a pretty decent sample, I chose to run both parametric and non-parametric tests 
+# The following chunks create a dataframe and then populate it with the results for both tests using nested for loops 
+
+# Initialize an empty data frame to store the results
+test_results <- data.frame(
+  Scenario1 = character(),
+  Scenario2 = character(),
+  Metric = character(),
+  Test = character(),
+  Statistic = numeric(),
+  P_Value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Define the scenarios and metrics to test
+scenarios <- unique(artifact_stats$Scenario)
+metrics <- c("VOM", "AV", "VOV")
+
+# Loop over each pair of scenarios and each metric
+for (metric in metrics) {
+  for (i in 1:(length(scenarios) - 1)) {
+    for (j in (i + 1):length(scenarios)) {
+      # Filter the data for both scenarios
+      data1 <- filter(artifact_stats, Scenario == scenarios[i])[[metric]]
+      data2 <- filter(artifact_stats, Scenario == scenarios[j])[[metric]]
+      
+      # Perform t-test
+      t_test <- t.test(data1, data2)
+      
+      # Add t-test results to the data frame
+      test_results <- rbind(test_results, c(
+        scenarios[i],
+        scenarios[j],
+        metric,
+        "T-Test",
+        t_test$statistic,
+        t_test$p.value
+      ))
+      
+      # Perform Mann-Whitney U test
+      mw_test <- wilcox.test(data1, data2)
+      
+      # Add Mann-Whitney U test results to the data frame
+      test_results <- rbind(test_results, c(
+        scenarios[i],
+        scenarios[j],
+        metric,
+        "Mann-Whitney",
+        mw_test$statistic,
+        mw_test$p.value
+      ))
+    }
+  }
+}
+
+# Convert the results to a data frame
+test_results <- as.data.frame(test_results)
+colnames(test_results) <- c("Scenario1", "Scenario2", "Metric", "Test", "Statistic", "P_Value")
+test_results$Statistic <- as.numeric(as.character(test_results$Statistic))
+test_results$P_Value <- as.numeric(as.character(test_results$P_Value))
+
+# Print the results
+print(test_results)
+
+
+```
+
+
+
+```{r}
+
+###I'm still working on this function to help explore the parameter space a bit
+
+explore_parameter_space_partial <- function() {
+    # Parameter ranges
+    num_artifacts_range <- c(50, 100, 150)
+    prestige_proportion_range <- seq(0.1, 0.9, by=0.1)
+    prestige_learning_prob_range <- seq(0.1, 0.9, by=0.1)
+
+    # Fixed parameters
+    num_assemblages <- 10
+    num_generations <- 5
+    initial_mean_length <- 50
+    initial_mean_width <- 30
+    initial_mean_length_sd <- 5
+    initial_mean_width_sd <- 3
+
+    results_list <- list()
+
+    for (num_artifacts in num_artifacts_range) {
+        for (prestige_proportion in prestige_proportion_range) {
+            for (prestige_learning_prob in prestige_learning_prob_range) {
+
+                # Generate data
+                data <- generateArtifactData(
+                    num_assemblages = num_assemblages, 
+                    num_artifacts = num_artifacts, 
+                    num_generations = num_generations,
+                    initial_mean_length = initial_mean_length,
+                    initial_mean_width = initial_mean_width,
+                    initial_mean_length_sd = initial_mean_length_sd,
+                    initial_mean_width_sd = initial_mean_width_sd,
+                    prestige_proportion = prestige_proportion,
+                    prestige_learning_prob = prestige_learning_prob
+                )
+                
+                return(data)  # Return data for inspection
+            }
+        }
+    }
+}
+
+# Call the partial function to get the data
+sample_data <- explore_parameter_space_partial()
+head(sample_data)
+```

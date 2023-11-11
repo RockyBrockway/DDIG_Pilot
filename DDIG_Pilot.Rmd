@@ -87,7 +87,8 @@ create_separate_dataframes <- function(data, cols_to_check) {
 ```{r}
 #run the function and put each variable in a list as a separate dataframe
 data_list <- create_separate_dataframes(data, cols_to_check)
-
+sd(data_list$dataML$ML)
+sd(data_list$dataMW$MW)
 ```
 
 
